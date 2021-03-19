@@ -1,7 +1,8 @@
 extern crate csv;
-use csv::{Reader, Writer};
+use core::{f32, str};
+use csv::Reader;
 use serde::Deserialize;
-use std::{collections::HashMap, env, error::Error, fs::File, io, io::BufReader, u32, vec};
+use std::{collections::HashMap, env, error::Error, fs::File, io, io::BufReader, u32};
 
 #[derive(Deserialize, Debug)]
 struct Paramaters {
@@ -12,16 +13,18 @@ struct Paramaters {
 
 #[derive(Deserialize, Debug)]
 struct Ln_edges {
-    snapshot_id: u32,
     src: String,
     trg: String,
-    last_update: String,
-    channel_id: String,
-    capacity: u32,
-    disabled: bool,
-    fee_base_msat: f32,
-    fee_rate_milli_msat: f32,
-    min_htlc: String,
+    fee: u32,
+}
+impl Ln_edges {
+    pub fn new(src: &str, trg: &str, fee: u32) -> Self {
+        Ln_edges {
+            src: src.to_string(),
+            trg: trg.to_string(),
+            fee,
+        }
+    }
 }
 
 fn main() {
@@ -56,12 +59,45 @@ fn filter_csv(mut csv_rdr: Reader<File>, params: &Paramaters) -> Result<(), Box<
     // read the snapshot && the amount
     let snapshot_id = params.snapshot;
     let amount = params.amount;
+    let amount_flot = amount as f32;
     let mut csv_wtr = csv::Writer::from_writer(io::stdout());
-    csv_wtr.write_record(csv_rdr.headers()?)?;
+    let mut ln_edges: Vec<Ln_edges> = vec![];
+    let mut capacity_map: HashMap<(String, String), (u32, u32)> = HashMap::new();
     for result in csv_rdr.records() {
-        let record: Ln_edges = result?;
-        println!("{:?}", &record);
+        let record = result?;
+
+        // check the sdnapshot_id && disabled.
+        let capacity: u32 = *&record[6].to_string().parse().unwrap();
+
+        if &record[1] != "0" || &record[7] == "True" || capacity < amount {
+            continue;
+        }
+
+        // load info.
+        let src = record[2].to_string();
+        let trg = record[3].to_string();
+        let base_fee: f32 = record[8].to_string().parse().unwrap();
+        let rate_fee: f32 = record[9].to_string().parse().unwrap();
+        let id = (src.clone(), trg.clone());
+        let id_revesed = (src.clone(), trg.clone());
+
+        // Insert Ln edges.
+        ln_edges.push(Ln_edges::new(
+            &src,
+            &trg,
+            (base_fee / 1000.0 + rate_fee * amount_flot / (u32::pow(10, 6) as f32)) as u32,
+        ));
+
+        // Init capacity
+
+        if capacity_map.contains_key(&id) {
+        } else if capacity_map.contains_key(&id_revesed) {
+        } else {
+        }
+        break;
+        // capacity_map.insert((src,trg), );
     }
+    // println!("{:?}", ln_edges);
     Ok(())
 }
 

@@ -57,15 +57,31 @@ fn load_graph(data_path: &String, params: &Paramaters) {
     };
 
     // generate graph from edges.
-    let gr = Graph::<(), i32>::from_edges(ln_edges);
+
+    // let gr = Graph::<(), u32, Ix = String>::from_edges(ln_edges);
+}
+
+fn mapping_address(ln_edges: Vec<(String, String, u32)>) {
+    // convert string to usize.
+    let mut address_mapping: HashMap<String, u32> = HashMap::new();
+    let mut counter = 0;
+    for edges in ln_edges {
+        let (src, trg, _) = edges;
+        for address in vec![src, trg] {
+            if let None = address_mapping.get(&address) {
+                counter += 1;
+                address_mapping.insert(address, counter);
+            }
+        }
+    }
 }
 
 fn generate_edges_from_csv(
     mut csv_rdr: Reader<File>,
     params: &Paramaters,
-) -> Result<(Vec<LnEdge>, HashMap<(String, String), u32>), Box<dyn Error>> {
+) -> Result<(Vec<(String, String, u32)>, HashMap<(String, String), u32>), Box<dyn Error>> {
     let amount = params.amount;
-    let mut ln_edges: Vec<LnEdge> = vec![];
+    let mut ln_edges: Vec<(String, String, u32)> = vec![];
     let mut capacity_map: HashMap<(String, String), u32> = HashMap::new();
     for result in csv_rdr.records() {
         let record = result?;
@@ -93,9 +109,9 @@ fn generate_edges_from_csv(
         } else {
             capacity_map.insert(id, capacity);
             // Insert Ln edges.
-            ln_edges.push(LnEdge::new(
-                &src,
-                &trg,
+            ln_edges.push((
+                src.clone(),
+                trg.clone(),
                 (base_fee as u64 / (1000 as u64)
                     + rate_fee as u64 * amount as u64 / u64::pow(10, 6)) as u32,
             ));

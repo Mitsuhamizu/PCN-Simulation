@@ -1,49 +1,51 @@
-use core::{f32, panic, str};
-use csv::Reader;
-use petgraph::Graph;
-use petgraph::IntoWeightedEdge;
+mod generator;
+mod reader;
+mod structure;
+
+use petgraph::{
+    algo,
+    graph::{self, node_index},
+    Graph,
+};
 use rand::Rng;
-use serde::Deserialize;
-use std::{collections::HashMap, error::Error, fs::File, io::BufReader, u32, u64};
-
-#[derive(Deserialize, Debug)]
-struct Paramaters {
-    count: u32,
-    amount: u32,
-}
-
-#[derive(Deserialize, Debug)]
-struct LnEdge {
-    src: String,
-    trg: String,
-    fee: u32,
-}
-impl LnEdge {
-    pub fn new(src: &str, trg: &str, fee: u32) -> Self {
-        LnEdge {
-            src: src.to_string(),
-            trg: trg.to_string(),
-            fee,
-        }
-    }
-}
+use std::{collections::HashMap, error::Error};
+use structure::Paramaters;
 
 fn main() {
     // read params
     let params_path = format!("{}/src/data/params.json", env!("CARGO_MANIFEST_DIR"));
-    let params = match read_json_from_file(&&params_path) {
+    let params = match reader::read_json_from_file(&&params_path) {
         Ok(params) => params,
         Err(error) => panic!("{:?}", error),
     };
 
     // generate graph
     let ln_edges_path = format!("{}/src/data/ln_edges_0.csv", env!("CARGO_MANIFEST_DIR"));
-    load_graph(&ln_edges_path, &params);
+    let (ln_network, balance_map) = match load_graph(&ln_edges_path, &params) {
+        Ok((ln_network, balance_map)) => (ln_network, balance_map),
+        Err(error) => panic!("{:?}", error),
+    };
+
+    // generate tx pair.
+    let node_number = ln_network.node_count();
+
+    // try to find path
+
+    let src: graph::NodeIndex<u32> = node_index(111);
+    let trg: graph::NodeIndex<u32> = node_index(1845);
+    let path = algo::astar(&ln_network, src, |n| n == trg, |e| *e.weight(), |_| 0);
+    println!("{:?}", path);
+    // for edge in ln_network.edges(a) {
+    //     println!("{:?}", edge);
+    // }
 }
 
-fn load_graph(data_path: &String, params: &Paramaters) {
+fn load_graph(
+    data_path: &String,
+    params: &Paramaters,
+) -> Result<(Graph<(), u32>, HashMap<(u32, u32), u32>), Box<dyn Error>> {
     // read csv
-    let csv = match read_csv(data_path) {
+    let csv = match reader::read_csv(data_path) {
         Ok(file) => file,
         Err(error) => panic!("{}", &error),
     };
@@ -51,123 +53,57 @@ fn load_graph(data_path: &String, params: &Paramaters) {
     // filter csv
     // let csv_filtered = filter_csv(csv, &params);
 
-    let (ln_edges, balance_map) = match generate_edges_from_csv(csv, params) {
+    let (ln_edges, balance_map) = match generator::generate_edges_from_csv(csv, params) {
         Ok((ln_edges, balance_map)) => (ln_edges, balance_map),
         Err(error) => panic!("{}", &error),
     };
 
-    // generate graph from edges.
+    // map address.
+    let address_mapping = match mapping_address(&ln_edges) {
+        Ok(address_mapping) => address_mapping,
+        Err(error) => panic!("{}", &error),
+    };
 
-    // let gr = Graph::<(), u32, Ix = String>::from_edges(ln_edges);
+    // convert string to u32.
+    let mut ln_edges_numerical: Vec<(u32, u32, u32)> = vec![];
+    for edge_string in ln_edges {
+        ln_edges_numerical.push((
+            *address_mapping.get(&edge_string.0).unwrap(),
+            *address_mapping.get(&edge_string.1).unwrap(),
+            edge_string.2,
+        ));
+    }
+    let ln_network = Graph::<(), u32>::from_edges(ln_edges_numerical);
+
+    // convert balance map.
+    let mut balance_map_numerical: HashMap<(u32, u32), u32> = HashMap::new();
+    for (key, value) in &balance_map {
+        balance_map_numerical.insert(
+            (
+                *address_mapping.get(&key.0).unwrap(),
+                *address_mapping.get(&key.1).unwrap(),
+            ),
+            *value,
+        );
+    }
+
+    Ok((ln_network, balance_map_numerical))
 }
 
-fn mapping_address(ln_edges: Vec<(String, String, u32)>) {
+fn mapping_address(
+    ln_edges: &Vec<(String, String, u32)>,
+) -> Result<HashMap<String, u32>, Box<dyn Error>> {
     // convert string to usize.
     let mut address_mapping: HashMap<String, u32> = HashMap::new();
     let mut counter = 0;
     for edges in ln_edges {
         let (src, trg, _) = edges;
         for address in vec![src, trg] {
-            if let None = address_mapping.get(&address) {
+            if let None = address_mapping.get(address) {
+                address_mapping.insert(address.clone(), counter);
                 counter += 1;
-                address_mapping.insert(address, counter);
             }
         }
     }
-}
-
-fn generate_edges_from_csv(
-    mut csv_rdr: Reader<File>,
-    params: &Paramaters,
-) -> Result<(Vec<(String, String, u32)>, HashMap<(String, String), u32>), Box<dyn Error>> {
-    let amount = params.amount;
-    let mut ln_edges: Vec<(String, String, u32)> = vec![];
-    let mut capacity_map: HashMap<(String, String), u32> = HashMap::new();
-    for result in csv_rdr.records() {
-        let record = result?;
-
-        // check the sdnapshot_id && disabled.
-        let capacity: u32 = *&record[7].to_string().parse().unwrap();
-
-        // Drop the edges with insufficient capacity.
-        if capacity < amount {
-            continue;
-        }
-
-        // load info.
-        let src = record[3].to_string();
-        let trg = record[4].to_string();
-        let base_fee: f32 = record[9].to_string().parse().unwrap();
-        let base_fee = base_fee as u32;
-        let rate_fee: f32 = record[10].to_string().parse().unwrap();
-        let rate_fee = rate_fee as u32;
-        let id = (src.clone(), trg.clone());
-
-        // load
-        if let Some(current_capacity) = capacity_map.get_mut(&id) {
-            *current_capacity += capacity;
-        } else {
-            capacity_map.insert(id, capacity);
-            // Insert Ln edges.
-            ln_edges.push((
-                src.clone(),
-                trg.clone(),
-                (base_fee as u64 / (1000 as u64)
-                    + rate_fee as u64 * amount as u64 / u64::pow(10, 6)) as u32,
-            ));
-        }
-    }
-    // generate balance.
-    let balance_map = match generate_balance(capacity_map) {
-        Ok(balance_map) => balance_map,
-        Err(error) => panic!("{}", &error),
-    };
-
-    Ok((ln_edges, balance_map))
-}
-
-// fn generate_balance() -> Result<HashMap<(String, String), u32>, Box<dyn Error>> {
-fn generate_balance(
-    capacity_map: HashMap<(String, String), u32>,
-) -> Result<HashMap<(String, String), u32>, Box<dyn Error>> {
-    let mut balance_map: HashMap<(String, String), u32> = HashMap::new();
-    let mut rng = rand::thread_rng();
-    for (id, capacity) in &capacity_map {
-        // generate random number.
-        let ratio = rng.gen_range(0, 101);
-
-        // generate reversed id.
-        let (src, trg) = id;
-        let id_reversed = (trg.clone(), src.clone());
-
-        // If the reversed channel is enabled.
-        if let Some(capacity_reversed) = capacity_map.get(&id_reversed) {
-            balance_map.insert(
-                id.clone(),
-                (ratio as u64 * *capacity as u64 / 100 as u64) as u32,
-            );
-            balance_map.insert(
-                id_reversed.clone(),
-                (*capacity_reversed as u64 * (100 - ratio) as u64 / 100) as u32,
-            );
-        } else {
-            balance_map.insert(
-                id.clone(),
-                (ratio as u64 * *capacity as u64 / 100 as u64) as u32,
-            );
-        }
-    }
-    Ok(balance_map)
-}
-
-fn read_csv(data_path: &String) -> Result<Reader<File>, Box<dyn Error>> {
-    let rdr = Reader::from_path(data_path)?;
-    Ok(rdr)
-}
-
-fn read_json_from_file(file_path: &String) -> Result<Paramaters, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let reader = BufReader::new(file);
-    let u = serde_json::from_reader(reader)?;
-    Ok(u)
+    Ok(address_mapping)
 }

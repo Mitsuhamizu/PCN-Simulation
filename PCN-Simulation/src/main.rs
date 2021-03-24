@@ -2,6 +2,8 @@ mod generator;
 mod reader;
 mod structure;
 
+use core::panic;
+use generator::generate_payment;
 use petgraph::{
     algo,
     graph::{self, node_index},
@@ -27,14 +29,18 @@ fn main() {
     };
 
     // generate tx pair.
-    let node_number = ln_network.node_count();
+    let node_number = ln_network.node_count() as u32;
+    let payments = match generate_payment(params.count, node_number, params.amount) {
+        Ok(payments) => payments,
+        Err(error) => panic!("{:?}", error),
+    };
 
     // try to find path
 
-    let src: graph::NodeIndex<u32> = node_index(111);
-    let trg: graph::NodeIndex<u32> = node_index(1845);
-    let path = algo::astar(&ln_network, src, |n| n == trg, |e| *e.weight(), |_| 0);
-    println!("{:?}", path);
+    // let src: graph::NodeIndex<u32> = node_index(111);
+    // let trg: graph::NodeIndex<u32> = node_index(1845);
+    // let path = algo::astar(&ln_network, src, |n| n == trg, |e| *e.weight(), |_| 0);
+    // println!("{:?}", path);
     // for edge in ln_network.edges(a) {
     //     println!("{:?}", edge);
     // }

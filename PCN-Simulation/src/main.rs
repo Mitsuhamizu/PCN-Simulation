@@ -1,17 +1,19 @@
 mod generator;
+mod ln_errors;
 mod reader;
 mod structure;
 
+use adjacent_pair_iterator::AdjacentPairIterator;
 use core::panic;
 use generator::generate_payment;
+use ln_errors::LnError;
 use petgraph::{
     algo,
-    graph::{self, node_index},
+    graph::{self, node_index, EdgeIndex, NodeIndex},
     Graph,
 };
-use rand::Rng;
-use std::{collections::HashMap, error::Error};
-use structure::Paramaters;
+use std::{collections::HashMap, error::Error, u32, vec};
+use structure::{Config, Paramaters};
 
 fn main() {
     // read params
@@ -34,9 +36,10 @@ fn main() {
         Ok(payments) => payments,
         Err(error) => panic!("{:?}", error),
     };
+    // simulation
 
-    // try to find path
-
+    let config = Config { retry_times: 10 };
+    simulation(ln_network, payments, balance_map, config);
     // let src: graph::NodeIndex<u32> = node_index(111);
     // let trg: graph::NodeIndex<u32> = node_index(1845);
     // let path = algo::astar(&ln_network, src, |n| n == trg, |e| *e.weight(), |_| 0);
@@ -44,6 +47,68 @@ fn main() {
     // for edge in ln_network.edges(a) {
     //     println!("{:?}", edge);
     // }
+}
+
+fn process_payment(
+    balance_map: &mut HashMap<(u32, u32), u32>,
+    path: Vec<NodeIndex>,
+    amounts: Vec<u32>,
+) -> Result<(), LnError> {
+    // unwrap the path.
+    let mut path_numerical: Vec<u32> = vec![];
+    for nodeindex in &path {
+        path_numerical.push(nodeindex.index() as u32);
+    }
+
+    let mut amounts_iter = amounts.into_iter();
+    // check the amount.
+    for edge_index in path_numerical.clone().into_iter().adjacent_pairs() {
+        let current_amount = amounts_iter.next().unwrap();
+        if balance_map.get(&edge_index).unwrap() < &current_amount {
+            return Err(LnError::InsufficientBalance((edge_index.0, edge_index.1)));
+        }
+    }
+
+    Ok(())
+}
+fn simulation(
+    ln_network: Graph<(), u32>,
+    payments: Vec<(u32, u32, u32)>,
+    mut balance_map: HashMap<(u32, u32), u32>,
+    config: Config,
+) {
+    let successful_payment: Vec<u32> = vec![];
+    for payment in &payments {
+        let attempt_time = 0;
+        let (src, trg, amount): (graph::NodeIndex<u32>, graph::NodeIndex<u32>, u32) = (
+            node_index(payment.0 as usize),
+            node_index(payment.1 as usize),
+            payment.2,
+        );
+
+        while true {
+            if let Some((fee_total, path)) =
+                algo::astar(&ln_network, src, |n| n == trg, |e| *e.weight(), |_| 0)
+            {
+                // generate amount.
+                let mut amount_accumulated = amount + fee_total;
+                let mut amounts: Vec<u32> = vec![];
+                for edge_index in path.clone().into_iter().adjacent_pairs() {
+                    let current_edge_index =
+                        ln_network.find_edge(edge_index.0, edge_index.1).unwrap();
+                    let current_fee = ln_network.edge_weight(current_edge_index).unwrap();
+                    amount_accumulated -= current_fee;
+                    amounts.push(amount_accumulated);
+                }
+                process_payment(&mut balance_map, path, amounts);
+            // There is path, so just try to do the payment.
+            } else {
+                // There is no path, just fails.
+            }
+            break;
+        }
+        break;
+    }
 }
 
 fn load_graph(
